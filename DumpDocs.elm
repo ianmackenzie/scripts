@@ -1,5 +1,6 @@
 port module Main exposing (..)
 
+import Dict exposing (Dict)
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode exposing (Value)
 import Regex exposing (Regex)
@@ -41,7 +42,7 @@ moduleDecoder =
         (Decode.field "values" (Decode.list memberDecoder))
 
 
-readFile : File (Read p) -> Script Int (List Module)
+readFile : File (Read p) -> Script Int (Dict String String)
 readFile file =
     File.read file
         |> Script.onError (handleError .message)
@@ -51,8 +52,15 @@ readFile file =
                     Ok modules ->
                         Script.succeed modules
 
-                    Err message ->
-                        handleError identity message
+                    Err decodeError ->
+                        handleError identity (Debug.toString decodeError)
+            )
+        |> Script.map
+            (\modules ->
+                modules
+                    |> List.map members
+                    |> List.concat
+                    |> Dict.fromList
             )
 
 
@@ -66,19 +74,18 @@ stripModuleName name =
 
 typeRegex : Regex
 typeRegex =
-    Regex.regex "(\\w+\\.)*(\\w+)"
+    Regex.fromString "(\\w+\\.)*(\\w+)" |> Maybe.withDefault Regex.never
 
 
 commaRegex : Regex
 commaRegex =
-    Regex.regex "\\s+,"
+    Regex.fromString "\\s+," |> Maybe.withDefault Regex.never
 
 
 stripTypeNames : String -> String
 stripTypeNames type_ =
     type_
         |> Regex.replace
-            Regex.All
             typeRegex
             (\match ->
                 match.submatches
@@ -88,39 +95,31 @@ stripTypeNames type_ =
                     |> Maybe.withDefault ""
             )
         |> Regex.replace
-            Regex.All
             commaRegex
             (always ",")
 
 
-members : Module -> List String
+members : Module -> List ( String, String )
 members mod =
     let
         moduleName =
             stripModuleName mod.name
     in
-    mod.members
-        |> List.map
-            (\{ name, type_ } ->
-                moduleName ++ "." ++ name ++ ": " ++ stripTypeNames type_
-            )
-
-
-dump : File (Read p) -> File (Write p) -> Script Int ()
-dump inputFile outputFile =
-    readFile inputFile
-        |> Script.andThen
-            (\modules ->
-                let
-                    allMembers =
-                        modules
-                            |> List.map members
-                            |> List.concat
-                            |> List.sort
-                in
-                File.writeTo outputFile (String.join "\n" allMembers)
-                    |> Script.onError (handleError .message)
-            )
+    if
+        (moduleName == "Geometry.Decode")
+            || (moduleName == "Geometry.Encode")
+            || (moduleName == "Interval")
+            || (moduleName == "Scalar")
+    then
+        []
+    else
+        mod.members
+            |> List.map
+                (\{ name, type_ } ->
+                    ( moduleName ++ "." ++ name
+                    , stripTypeNames type_
+                    )
+                )
 
 
 script : Script.Context -> Script Int ()
@@ -133,23 +132,62 @@ script { fileSystem } =
 
         newInputFile =
             FileSystem.file Permissions.readOnly
-                "C:/Git/ianmackenzie/elm-geometry/docs.json"
+                "C:/Git/ianmackenzie/elm-geometry-0.18/docs.json"
                 fileSystem
 
         oldOutputFile =
             FileSystem.file Permissions.writeOnly
-                "C:/Git/ianmackenzie/elm-geometry/old.txt"
+                "C:/Git/ianmackenzie/elm-geometry-0.18/old.txt"
                 fileSystem
 
         newOutputFile =
             FileSystem.file Permissions.writeOnly
-                "C:/Git/ianmackenzie/elm-geometry/new.txt"
+                "C:/Git/ianmackenzie/elm-geometry-0.18/new.txt"
                 fileSystem
     in
-    Script.do
-        [ dump oldInputFile oldOutputFile
-        , dump newInputFile newOutputFile
-        ]
+    Script.map2 Tuple.pair (readFile oldInputFile) (readFile newInputFile)
+        |> Script.andThen
+            (\( oldMembers, newMembers ) ->
+                let
+                    join name type_ =
+                        name ++ ": " ++ type_
+
+                    ( oldAccumulated, newAccumulated ) =
+                        Dict.merge
+                            (\oldName oldType ( old, new ) ->
+                                ( join oldName oldType :: old
+                                , "" :: new
+                                )
+                            )
+                            (\name oldType newType ( old, new ) ->
+                                if oldType == newType then
+                                    ( old, new )
+                                else
+                                    ( join name oldType :: old
+                                    , join name newType :: new
+                                    )
+                            )
+                            (\newName newType ( old, new ) ->
+                                ( "" :: old
+                                , join newName newType :: new
+                                )
+                            )
+                            oldMembers
+                            newMembers
+                            ( [], [] )
+
+                    oldLines =
+                        List.reverse oldAccumulated
+
+                    newLines =
+                        List.reverse newAccumulated
+                in
+                Script.do
+                    [ File.writeTo oldOutputFile (String.join "\n" oldLines)
+                    , File.writeTo newOutputFile (String.join "\n" newLines)
+                    ]
+                    |> Script.onError (handleError .message)
+            )
 
 
 port requestPort : Value -> Cmd msg
