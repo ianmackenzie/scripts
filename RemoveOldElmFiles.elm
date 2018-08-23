@@ -8,53 +8,60 @@ import Script.FileSystem as FileSystem exposing (FileSystem)
 import Script.Permissions as Permissions exposing (ReadWrite)
 
 
-findRecursively : String -> Directory ReadWrite -> Script Directory.Error ()
-findRecursively prefix directory =
+processSubdirectory : Directory ReadWrite -> String -> Script Directory.Error ()
+processSubdirectory subdirectory prefix =
+    let
+        name =
+            Directory.name subdirectory
+
+        path =
+            prefix ++ name
+    in
+    if name == "elm-stuff" then
+        Script.do
+            [ Script.printLine ("Obliterating " ++ path ++ "...")
+            , Directory.obliterate subdirectory
+            ]
+    else if name == "node_modules" then
+        Script.succeed ()
+    else
+        let
+            updatedPrefix =
+                path ++ "/"
+        in
+        recurseInto subdirectory updatedPrefix
+
+
+processFile : File ReadWrite -> String -> Script File.Error ()
+processFile file prefix =
+    let
+        name =
+            File.name file
+
+        path =
+            prefix ++ name
+    in
+    if name == "elm.exe" then
+        Script.do
+            [ Script.printLine ("Deleting " ++ path ++ "...")
+            , File.delete file
+            ]
+    else
+        Script.succeed ()
+
+
+recurseInto : Directory ReadWrite -> String -> Script Directory.Error ()
+recurseInto directory prefix =
     Script.do
         [ Directory.listSubdirectories directory
             |> Script.andThen
                 (Script.forEach
-                    (\subdirectory ->
-                        let
-                            subdirectoryName =
-                                Directory.name subdirectory
-                        in
-                        if subdirectoryName == "elm-stuff" then
-                            Script.do
-                                [ Script.printLine <|
-                                    "Obliterating "
-                                        ++ prefix
-                                        ++ subdirectoryName
-                                        ++ "..."
-                                , Directory.obliterate subdirectory
-                                ]
-                        else if subdirectoryName == "node_modules" then
-                            Script.do []
-                        else
-                            let
-                                updatedPrefix =
-                                    prefix ++ subdirectoryName ++ "/"
-                            in
-                            findRecursively updatedPrefix subdirectory
-                    )
+                    (\subdirectory -> processSubdirectory subdirectory prefix)
                 )
         , Directory.listFiles directory
             |> Script.andThen
                 (Script.forEach
-                    (\file ->
-                        let
-                            fileName =
-                                File.name file
-                        in
-                        if fileName == "elm.exe" then
-                            Script.do
-                                [ Script.printLine
-                                    ("Deleting " ++ prefix ++ fileName ++ "...")
-                                , File.delete file
-                                ]
-                        else
-                            Script.do []
-                    )
+                    (\file -> processFile file prefix)
                 )
         ]
 
@@ -65,7 +72,7 @@ script { fileSystem } =
         rootDirectory =
             fileSystem |> FileSystem.directory "C:/Git"
     in
-    findRecursively "" rootDirectory |> Script.onError (handleError .message)
+    recurseInto rootDirectory "" |> Script.onError (handleError .message)
 
 
 main : Script.Program
