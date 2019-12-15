@@ -6,7 +6,7 @@
     "license": "BSD3",
     "source-directories": [
         ".",
-        "../script-experiment/src"
+        "../elm-script/src"
     ],
     "dependencies": {
         "direct": {
